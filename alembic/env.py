@@ -8,9 +8,8 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from payment_service.core.config import get_settings
-from payment_service.infrastructure.db import models  # noqa: F401
-from payment_service.infrastructure.db.base import Base
+from payment_service.config import get_settings
+from payment_service.models import Base
 
 config = context.config
 if config.config_file_name is not None:

@@ -1,28 +1,39 @@
-from __future__ import annotations
-
+from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import uuid4
 
 import httpx
 import pytest
-from tests.unit.fakes import FakeApiCreateService, FakeApiGetService, make_payment
 
-from payment_service.api.dependencies import get_create_payment_service, get_payment_service
-from payment_service.main import create_app
+from payment_service import main
+from payment_service.models import PaymentModel
 
 
-def app_with_fakes():
-    app = create_app()
-    payment = make_payment()
-    app.dependency_overrides[get_create_payment_service] = lambda: FakeApiCreateService(payment)
-    app.dependency_overrides[get_payment_service] = lambda: FakeApiGetService(payment)
-    return app
+def payment() -> PaymentModel:
+    return PaymentModel(
+        id=uuid4(),
+        amount=Decimal("42.10"),
+        currency="USD",
+        description="Order",
+        metadata_={"order_id": 1},
+        status="pending",
+        idempotency_key="idem-1",
+        webhook_url="https://merchant.example/hook",
+        created_at=datetime.now(UTC),
+    )
 
 
 @pytest.mark.asyncio
-async def test_create_payment_returns_202() -> None:
+async def test_create_payment_returns_202(monkeypatch: pytest.MonkeyPatch) -> None:
+    stored = payment()
+
+    async def fake_create(*args: object) -> PaymentModel:
+        del args
+        return stored
+
+    monkeypatch.setattr(main, "create_payment_record", fake_create)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app_with_fakes()),
-        base_url="http://test",
+        transport=httpx.ASGITransport(app=main.create_app()), base_url="http://test"
     ) as client:
         response = await client.post(
             "/api/v1/payments",
@@ -37,37 +48,36 @@ async def test_create_payment_returns_202() -> None:
         )
 
     assert response.status_code == 202
-    assert Decimal(response.json()["amount"]) == Decimal("42.10")
-    assert response.headers["location"].startswith("/api/v1/payments/")
+    assert response.json()["payment_id"] == str(stored.id)
+    assert response.headers["location"].endswith(str(stored.id))
 
 
 @pytest.mark.asyncio
-async def test_missing_api_key_returns_401() -> None:
+async def test_business_endpoint_requires_api_key() -> None:
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app_with_fakes()),
-        base_url="http://test",
+        transport=httpx.ASGITransport(app=main.create_app()), base_url="http://test"
     ) as client:
-        response = await client.get("/api/v1/payments/00000000-0000-0000-0000-000000000001")
+        response = await client.get(f"/api/v1/payments/{uuid4()}")
 
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_missing_idempotency_key_returns_422() -> None:
+async def test_get_payment_returns_details(monkeypatch: pytest.MonkeyPatch) -> None:
+    stored = payment()
+
+    async def fake_get(*args: object) -> PaymentModel:
+        del args
+        return stored
+
+    monkeypatch.setattr(main, "get_payment_record", fake_get)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app_with_fakes()),
-        base_url="http://test",
+        transport=httpx.ASGITransport(app=main.create_app()), base_url="http://test"
     ) as client:
-        response = await client.post(
-            "/api/v1/payments",
-            headers={"X-API-Key": "change-me"},
-            json={
-                "amount": "1.00",
-                "currency": "RUB",
-                "description": "Order",
-                "metadata": {},
-                "webhook_url": "https://merchant.example/hook",
-            },
+        response = await client.get(
+            f"/api/v1/payments/{stored.id}", headers={"X-API-Key": "change-me"}
         )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    assert response.json()["metadata"] == {"order_id": 1}
+    assert response.json()["status"] == "pending"

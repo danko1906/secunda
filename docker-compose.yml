@@ -2,9 +2,6 @@ x-app-environment: &app-environment
   API_KEY: ${API_KEY:-local-secret-key}
   DATABASE_URL: postgresql+asyncpg://payments:payments@postgres:5432/payments
   RABBITMQ_URL: amqp://payments:payments@rabbitmq:5672/
-  LOG_LEVEL: ${LOG_LEVEL:-INFO}
-  PROCESSING_LEASE_SECONDS: ${PROCESSING_LEASE_SECONDS:-30}
-  CONSUMER_PREFETCH_COUNT: ${CONSUMER_PREFETCH_COUNT:-1}
 
 x-app-service: &app-service
   build:
@@ -75,29 +72,14 @@ services:
       timeout: 3s
       retries: 20
 
-  outbox-relay:
-    <<: *app-service
-    command: ["python", "-m", "payment_service.workers.outbox_relay"]
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
-
   consumer:
     <<: *app-service
-    command: ["python", "-m", "payment_service.workers.consumer"]
+    command: ["python", "-m", "payment_service.worker"]
     depends_on:
       migrate:
         condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
-
-  webhook-mock:
-    <<: *app-service
-    command: ["uvicorn", "payment_service.webhook_mock:app", "--host", "0.0.0.0", "--port", "8001"]
-    ports:
-      - "8001:8001"
 
 volumes:
   postgres-data:

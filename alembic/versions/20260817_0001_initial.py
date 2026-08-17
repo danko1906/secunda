@@ -2,7 +2,6 @@
 
 Revision ID: 20260817_0001
 Revises:
-Create Date: 2026-08-17 12:00:00
 """
 
 from collections.abc import Sequence
@@ -24,10 +23,9 @@ def upgrade() -> None:
         sa.Column("amount", sa.Numeric(18, 2), nullable=False),
         sa.Column("currency", sa.String(3), nullable=False),
         sa.Column("description", sa.String(500), nullable=False),
-        sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("metadata", postgresql.JSONB(), nullable=False),
         sa.Column("status", sa.String(16), nullable=False),
         sa.Column("idempotency_key", sa.String(255), nullable=False),
-        sa.Column("request_hash", sa.String(64), nullable=False),
         sa.Column("webhook_url", sa.Text(), nullable=False),
         sa.Column(
             "created_at",
@@ -35,54 +33,42 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.Column("processed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("webhook_delivered_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("processed_at", sa.DateTime(timezone=True)),
+        sa.Column("webhook_delivered_at", sa.DateTime(timezone=True)),
         sa.CheckConstraint("amount > 0", name="ck_payments_amount_positive"),
         sa.CheckConstraint("currency IN ('RUB', 'USD', 'EUR')", name="ck_payments_currency"),
         sa.CheckConstraint(
-            "status IN ('pending', 'succeeded', 'failed')",
-            name="ck_payments_status",
+            "status IN ('pending', 'succeeded', 'failed')", name="ck_payments_status"
         ),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("idempotency_key"),
     )
-    op.create_index(
-        "uq_payments_idempotency_key",
-        "payments",
-        ["idempotency_key"],
-        unique=True,
-    )
-
     op.create_table(
         "outbox",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("aggregate_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("payment_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("event_type", sa.String(100), nullable=False),
-        sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("payload", postgresql.JSONB(), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("attempts", sa.Integer(), server_default="0", nullable=False),
-        sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("last_error", sa.Text(), nullable=True),
+        sa.Column("published_at", sa.DateTime(timezone=True)),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_outbox_aggregate_id", "outbox", ["aggregate_id"], unique=False)
+    op.create_index("ix_outbox_payment_id", "outbox", ["payment_id"])
     op.create_index(
         "ix_outbox_unpublished",
         "outbox",
         ["created_at"],
-        unique=False,
         postgresql_where=sa.text("published_at IS NULL"),
     )
 
 
 def downgrade() -> None:
     op.drop_index("ix_outbox_unpublished", table_name="outbox")
-    op.drop_index("ix_outbox_aggregate_id", table_name="outbox")
+    op.drop_index("ix_outbox_payment_id", table_name="outbox")
     op.drop_table("outbox")
-    op.drop_index("uq_payments_idempotency_key", table_name="payments")
     op.drop_table("payments")
